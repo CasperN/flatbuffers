@@ -1796,9 +1796,9 @@ class RustGenerator : public BaseGenerator {
   }
 
   void GenNamespaceImports(const int white_spaces) {
-    if (white_spaces == 0) {
-      code_ += "#![allow(unused_imports, dead_code)]";
-    }
+    // #![allow(...)] should not be generated because it breaks users that include!
+    // generated code. #![...] can only be used at the top of source files.
+    // See #6261 for details.
     std::string indent = std::string(white_spaces, ' ');
     code_ += "";
     if (!parser_.opts.generate_all) {
