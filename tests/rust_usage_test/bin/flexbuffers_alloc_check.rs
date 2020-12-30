@@ -132,6 +132,7 @@ fn main() {
     dbg!(start_up, after_warmup, final_allocs);
 }
 
+#[cfg(not(miri))] // Miri allocates
 #[test]
 fn no_extra_allocations() {
     main()

@@ -33,6 +33,7 @@ impl quickcheck::Arbitrary for NonNullString {
     }
 }
 
+#[cfg(not(miri))]  // slow.
 quickcheck! {
     fn qc_vec_bool(xs: Vec<bool>) -> bool {
         let mut builder = Builder::default();

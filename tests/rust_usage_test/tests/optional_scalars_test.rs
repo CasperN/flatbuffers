@@ -33,7 +33,8 @@ macro_rules! make_test {
             assert_eq!(s.$maybe(), Some($five));
 
             // Test defaults are used when not specified.
-            let s = flatbuffers::root::<ScalarStuff>(&[0; 8]).unwrap();
+            let buf = flatbuffers::Aligned16Vec::from_u8s(vec![0; 8]);
+            let s = flatbuffers::root::<ScalarStuff>(buf.as_ref()).unwrap();
             assert_eq!(s.$just(), $zero);
             assert_eq!(s.$default(), $fortytwo);
             assert_eq!(s.$maybe(), None);

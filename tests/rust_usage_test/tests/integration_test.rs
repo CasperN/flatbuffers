@@ -231,6 +231,7 @@ fn serialized_example_is_accessible_and_correct(bytes: &[u8], identifier_require
 //     flatbuffers::FlatBufferBuilder::new_with_capacity(flatbuffers::FLATBUFFERS_MAX_BUFFER_SIZE);
 // }
 
+#[cfg(not(miri))]  // Too slow
 #[should_panic]
 #[test]
 fn builder_abort_with_greater_than_maximum_buffer_size() {
@@ -242,9 +243,15 @@ fn builder_collapses_into_vec() {
     let mut b = flatbuffers::FlatBufferBuilder::new();
     create_serialized_example_with_generated_code(&mut b);
     let (backing_buf, head) = b.collapse();
-    serialized_example_is_accessible_and_correct(&backing_buf[head..], true, false).unwrap();
+    let backing_buf_u8 = unsafe {
+        core::slice::from_raw_parts(
+            (backing_buf.as_ptr() as *const u8).add(head),
+            backing_buf.len() * 16 - head,
+        )
+    };
+    serialized_example_is_accessible_and_correct(backing_buf_u8, true, false).unwrap();
 }
-
+// Miri is slow but its important that the verifier blocks UB.
 #[test]
 fn verifier_one_byte_errors_do_not_crash() {
     let mut b = flatbuffers::FlatBufferBuilder::new();
@@ -271,6 +278,7 @@ fn verifier_one_byte_errors_do_not_crash() {
         }
     }
 }
+#[cfg(not(miri))]  // Miri is slow.
 #[test]
 fn verifier_too_many_tables() {
     use my_game::example::*;
@@ -295,6 +303,7 @@ fn verifier_too_many_tables() {
     opts.max_tables += 2;
     assert!(flatbuffers::root_with_opts::<Monster>(&opts, data).is_ok());
 }
+#[cfg(not(miri))]  // Miri is slow.
 #[test]
 fn verifier_apparent_size_too_large() {
     use my_game::example::*;
@@ -413,7 +422,7 @@ mod lifetime_correctness {
     fn table_get_field_from_static_buffer_1() {
         let buf = load_file("../monsterdata_test.mon").expect("missing monsterdata_test.mon");
         // create 'static slice
-        let slice: &[u8] = &buf;
+        let slice: &[u8] = buf.as_ref();
         let slice: &'static [u8] = unsafe { mem::transmute(slice) };
         // make sure values retrieved from the 'static buffer are themselves 'static
         let monster: my_game::example::Monster<'static> = my_game::example::root_as_monster(slice).unwrap();
@@ -423,18 +432,10 @@ mod lifetime_correctness {
     }
 
     #[test]
-    fn table_get_field_from_static_buffer_2() {
-        static DATA: [u8; 4] = [0, 0, 0, 0]; // some binary data
-        let table: flatbuffers::Table<'static> = flatbuffers::Table::new(&DATA, 0);
-        // this line should compile:
-        table.get::<&'static str>(0, None);
-    }
-
-    #[test]
     fn table_object_self_lifetime_in_closure() {
         // This test is designed to ensure that lifetimes for temporary intermediate tables aren't inflated beyond where the need to be.
         let buf = load_file("../monsterdata_test.mon").expect("missing monsterdata_test.mon");
-        let monster = my_game::example::root_as_monster(&buf).unwrap();
+        let monster = my_game::example::root_as_monster(buf.as_ref()).unwrap();
         let enemy: Option<my_game::example::Monster> = monster.enemy();
         // This line won't compile if "self" is required to live for the lifetime of buf above as the borrow disappears at the end of the closure.
         let enemy_of_my_enemy = enemy.map(|e| {
@@ -1003,6 +1004,7 @@ mod roundtrip_byteswap {
     // fn fuzz_f64() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop_f64 as fn(f64)); }
 }
 
+#[cfg(not(miri))]  // Miri too slow.
 #[cfg(test)]
 mod roundtrip_vectors {
 
@@ -1258,6 +1260,7 @@ mod roundtrip_table {
 
     use super::LCG;
 
+    #[cfg(not(miri))]  // Miri too slow
     #[test]
     fn table_of_mixed_scalars_fuzz() {
         // Values we're testing against: chosen to ensure no bits get chopped
@@ -1365,6 +1368,7 @@ mod roundtrip_table {
         }
     }
 
+    #[cfg(not(miri))] // Miri is too slow
     #[test]
     fn table_of_byte_strings_fuzz() {
         fn prop(vec: Vec<Vec<u8>>) {
@@ -1401,6 +1405,7 @@ mod roundtrip_table {
         quickcheck::QuickCheck::new().max_tests(n).quickcheck(prop as fn(Vec<_>));
     }
 
+    #[cfg(not(miri))] // Miri is too slow
     #[test]
     fn fuzz_table_of_strings() {
         fn prop(vec: Vec<String>) {
@@ -1433,6 +1438,7 @@ mod roundtrip_table {
         quickcheck::QuickCheck::new().max_tests(n).quickcheck(prop as fn(Vec<String>));
     }
 
+    #[cfg(not(miri))] // Miri is too slow
     mod table_of_vectors_of_scalars {
         extern crate flatbuffers;
         extern crate quickcheck;
@@ -1516,48 +1522,6 @@ mod roundtrip_table {
 }
 
 #[cfg(test)]
-mod roundtrip_scalars {
-    extern crate flatbuffers;
-    extern crate quickcheck;
-
-    const N: u64 = 1000;
-
-    fn prop<T: PartialEq + ::std::fmt::Debug + Copy + flatbuffers::EndianScalar>(x: T) {
-        let mut buf = vec![0u8; ::std::mem::size_of::<T>()];
-        flatbuffers::emplace_scalar(&mut buf[..], x);
-        let y = flatbuffers::read_scalar(&buf[..]);
-        assert_eq!(x, y);
-    }
-
-    #[test]
-    fn fuzz_bool() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<bool> as fn(_)); }
-    #[test]
-    fn fuzz_u8() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<u8> as fn(_)); }
-    #[test]
-    fn fuzz_i8() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<i8> as fn(_)); }
-
-    #[test]
-    fn fuzz_u16() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<u16> as fn(_)); }
-    #[test]
-    fn fuzz_i16() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<i16> as fn(_)); }
-
-    #[test]
-    fn fuzz_u32() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<u32> as fn(_)); }
-    #[test]
-    fn fuzz_i32() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<i32> as fn(_)); }
-
-    #[test]
-    fn fuzz_u64() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<u64> as fn(_)); }
-    #[test]
-    fn fuzz_i64() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<i64> as fn(_)); }
-
-    #[test]
-    fn fuzz_f32() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<f32> as fn(_)); }
-    #[test]
-    fn fuzz_f64() { quickcheck::QuickCheck::new().max_tests(N).quickcheck(prop::<f64> as fn(_)); }
-}
-
-#[cfg(test)]
 mod roundtrip_push_follow_scalars {
     extern crate flatbuffers;
     extern crate quickcheck;
@@ -1571,10 +1535,10 @@ mod roundtrip_push_follow_scalars {
     macro_rules! impl_prop {
         ($fn_name:ident, $ty:ident) => (
             fn $fn_name(x: $ty) {
-                let mut buf = vec![0u8; ::std::mem::size_of::<$ty>()];
-                x.push(&mut buf[..], &[][..]);
+                let mut buf = flatbuffers::Aligned16Vec::from_u8s(vec![0; 8]);
+                x.push(buf.as_mut(), &[]);
                 let fs: flatbuffers::FollowStart<$ty> = flatbuffers::FollowStart::new();
-                assert_eq!(fs.self_follow(&buf[..], 0), x);
+                assert_eq!(fs.self_follow(buf.as_ref(), 0), x);
             }
         )
     }
@@ -1705,6 +1669,7 @@ mod write_and_read_examples {
         serialized_example_is_accessible_and_correct(&buf[..], true, false).unwrap();
     }
 
+    #[cfg(not(miri))]  // Miri is slow.
     #[test]
     fn library_code_creates_correct_example_repeatedly_with_reset() {
         let b = &mut flatbuffers::FlatBufferBuilder::new();
@@ -1729,7 +1694,7 @@ mod read_examples_from_other_language_ports {
     #[test]
     fn gold_cpp_example_data_is_accessible_and_correct() {
         let buf = load_file("../monsterdata_test.mon").expect("missing monsterdata_test.mon");
-        serialized_example_is_accessible_and_correct(&buf[..], true, false).unwrap();
+        serialized_example_is_accessible_and_correct(buf.as_ref(), true, false).unwrap();
     }
     #[test]
     fn java_wire_example_data_is_accessible_and_correct() {
@@ -1739,7 +1704,7 @@ mod read_examples_from_other_language_ports {
             return;
         }
         let buf = buf.unwrap();
-        serialized_example_is_accessible_and_correct(&buf[..], true, false).unwrap();
+        serialized_example_is_accessible_and_correct(buf.as_ref(), true, false).unwrap();
     }
     #[test]
     fn java_wire_size_prefixed_example_data_is_accessible_and_correct() {
@@ -1749,7 +1714,7 @@ mod read_examples_from_other_language_ports {
             return;
         }
         let buf = buf.unwrap();
-        serialized_example_is_accessible_and_correct(&buf[..], true, true).unwrap();
+        serialized_example_is_accessible_and_correct(buf.as_ref(), true, true).unwrap();
     }
 }
 
@@ -1942,7 +1907,7 @@ mod builder_asserts {
 #[cfg(test)]
 mod follow_impls {
     extern crate flatbuffers;
-    use flatbuffers::Follow;
+    use flatbuffers::{Follow, Aligned16Vec};
     use flatbuffers::field_index_to_field_offset as fi2fo;
 
     // Define a test struct to use in a few tests. This replicates the work that the code generator
@@ -1981,139 +1946,138 @@ mod follow_impls {
             flatbuffers::follow_cast_ref::<FooStruct>(buf, loc)
         }
     }
-
     #[test]
     fn to_u8() {
-        let vec: Vec<u8> = vec![255, 3];
+        let vec = Aligned16Vec::from_u8s(vec![255, 3]);
         let fs: flatbuffers::FollowStart<u8> = flatbuffers::FollowStart::new();
-        assert_eq!(fs.self_follow(&vec[..], 1), 3);
+        assert_eq!(fs.self_follow(vec.as_ref(), 1), 3);
     }
 
     #[test]
     fn to_u16() {
-        let vec: Vec<u8> = vec![255, 255, 3, 4];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 3, 4]);
         let fs: flatbuffers::FollowStart<u16> = flatbuffers::FollowStart::new();
-        assert_eq!(fs.self_follow(&vec[..], 2), 1027);
+        assert_eq!(fs.self_follow(vec.as_ref(), 2), 1027);
     }
 
     #[test]
     fn to_f32() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, /* start of value */ 208, 15, 73, 64];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, /* start of value */ 208, 15, 73, 64]);
         let fs: flatbuffers::FollowStart<f32> = flatbuffers::FollowStart::new();
-        assert_eq!(fs.self_follow(&vec[..], 4), 3.14159);
+        assert_eq!(fs.self_follow(vec.as_ref(), 4), 3.14159);
     }
 
     #[test]
     fn to_string() {
-        let vec: Vec<u8> = vec![255,255,255,255, 3, 0, 0, 0, 'f' as u8, 'o' as u8, 'o' as u8, 0];
+        let vec = Aligned16Vec::from_u8s(vec![255,255,255,255, 3, 0, 0, 0, 'f' as u8, 'o' as u8, 'o' as u8, 0]);
         let off: flatbuffers::FollowStart<&str> = flatbuffers::FollowStart::new();
-        assert_eq!(off.self_follow(&vec[..], 4), "foo");
+        assert_eq!(off.self_follow(vec.as_ref(), 4), "foo");
     }
 
     #[test]
     fn to_byte_slice() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, 4, 0, 0, 0, 1, 2, 3, 4];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, 4, 0, 0, 0, 1, 2, 3, 4]);
         let off: flatbuffers::FollowStart<flatbuffers::Vector<u8>> = flatbuffers::FollowStart::new();
-        assert_eq!(off.self_follow(&vec[..], 4).safe_slice(), &[1, 2, 3, 4][..]);
+        assert_eq!(off.self_follow(vec.as_ref(), 4).safe_slice(), &[1, 2, 3, 4][..]);
     }
 
     #[test]
     fn to_byte_vector() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, 4, 0, 0, 0, 1, 2, 3, 4];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, 4, 0, 0, 0, 1, 2, 3, 4]);
         let off: flatbuffers::FollowStart<flatbuffers::Vector<u8>> = flatbuffers::FollowStart::new();
-        assert_eq!(off.self_follow(&vec[..], 4).safe_slice(), &[1, 2, 3, 4][..]);
+        assert_eq!(off.self_follow(vec.as_ref(), 4).safe_slice(), &[1, 2, 3, 4][..]);
     }
 
     #[test]
     fn to_byte_string_zero_teriminated() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, 3, 0, 0, 0, 1, 2, 3, 0];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, 3, 0, 0, 0, 1, 2, 3, 0]);
         let off: flatbuffers::FollowStart<flatbuffers::Vector<u8>> = flatbuffers::FollowStart::new();
-        assert_eq!(off.self_follow(&vec[..], 4).safe_slice(), &[1, 2, 3][..]);
+        assert_eq!(off.self_follow(vec.as_ref(), 4).safe_slice(), &[1, 2, 3][..]);
     }
 
     #[cfg(target_endian = "little")]
     #[test]
     fn to_slice_of_u16() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, 2, 0, 0, 0, 1, 2, 3, 4];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, 2, 0, 0, 0, 1, 2, 3, 4]);
         let off: flatbuffers::FollowStart<&[u16]> = flatbuffers::FollowStart::new();
-        assert_eq!(off.self_follow(&vec[..], 4), &vec![513, 1027][..]);
+        assert_eq!(off.self_follow(vec.as_ref(), 4), &vec![513, 1027][..]);
     }
 
     #[test]
     fn to_vector_of_u16() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, 2, 0, 0, 0, 1, 2, 3, 4];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, 2, 0, 0, 0, 1, 2, 3, 4]);
         let off: flatbuffers::FollowStart<flatbuffers::Vector<u16>> = flatbuffers::FollowStart::new();
-        assert_eq!(off.self_follow(&vec[..], 4).len(), 2);
-        assert_eq!(off.self_follow(&vec[..], 4).get(0), 513);
-        assert_eq!(off.self_follow(&vec[..], 4).get(1), 1027);
+        assert_eq!(off.self_follow(vec.as_ref(), 4).len(), 2);
+        assert_eq!(off.self_follow(vec.as_ref(), 4).get(0), 513);
+        assert_eq!(off.self_follow(vec.as_ref(), 4).get(1), 1027);
     }
 
     #[test]
     fn to_struct() {
-        let vec: Vec<u8> = vec![255, 255, 255, 255, 1, 2, 3, 4];
+        let vec = Aligned16Vec::from_u8s(vec![255, 255, 255, 255, 1, 2, 3, 4]);
         let off: flatbuffers::FollowStart<&FooStruct> = flatbuffers::FollowStart::new();
-        assert_eq!(*off.self_follow(&vec[..], 4), FooStruct::new(1, 2, 1027));
+        assert_eq!(*off.self_follow(vec.as_ref(), 4), FooStruct::new(1, 2, 1027));
     }
 
     #[test]
     fn to_vector_of_offset_to_string_elements() {
-        let buf: Vec<u8> = vec![/* vec len */ 1, 0, 0, 0, /* offset to string */ 4, 0, 0, 0, /* str length */ 3, 0, 0, 0, 'f' as u8, 'o' as u8, 'o' as u8, 0];
+        let buf = Aligned16Vec::from_u8s(vec![/* vec len */ 1, 0, 0, 0, /* offset to string */ 4, 0, 0, 0, /* str length */ 3, 0, 0, 0, 'f' as u8, 'o' as u8, 'o' as u8, 0]);
         let s: flatbuffers::FollowStart<flatbuffers::Vector<flatbuffers::ForwardsUOffset<&str>>> = flatbuffers::FollowStart::new();
-        assert_eq!(s.self_follow(&buf[..], 0).len(), 1);
-        assert_eq!(s.self_follow(&buf[..], 0).get(0), "foo");
+        assert_eq!(s.self_follow(buf.as_ref(), 0).len(), 1);
+        assert_eq!(s.self_follow(buf.as_ref(), 0).get(0), "foo");
     }
 
     #[test]
     fn to_slice_of_struct_elements() {
-        let buf: Vec<u8> = vec![1, 0, 0, 0, /* struct data */ 1, 2, 3, 4];
+        let buf = Aligned16Vec::from_u8s(vec![1, 0, 0, 0, /* struct data */ 1, 2, 3, 4]);
         let fs: flatbuffers::FollowStart<flatbuffers::Vector<FooStruct>> = flatbuffers::FollowStart::new();
-        assert_eq!(fs.self_follow(&buf[..], 0).safe_slice(), &vec![FooStruct::new(1, 2, 1027)][..]);
+        assert_eq!(fs.self_follow(buf.as_ref(), 0).safe_slice(), &vec![FooStruct::new(1, 2, 1027)][..]);
     }
 
     #[test]
     fn to_vector_of_struct_elements() {
-        let buf: Vec<u8> = vec![1, 0, 0, 0, /* struct data */ 1, 2, 3, 4];
+        let buf = Aligned16Vec::from_u8s(vec![1, 0, 0, 0, /* struct data */ 1, 2, 3, 4]);
         let fs: flatbuffers::FollowStart<flatbuffers::Vector<FooStruct>> = flatbuffers::FollowStart::new();
-        assert_eq!(fs.self_follow(&buf[..], 0).len(), 1);
-        assert_eq!(fs.self_follow(&buf[..], 0).get(0), &FooStruct::new(1, 2, 1027));
+        assert_eq!(fs.self_follow(buf.as_ref(), 0).len(), 1);
+        assert_eq!(fs.self_follow(buf.as_ref(), 0).get(0), &FooStruct::new(1, 2, 1027));
     }
 
     #[test]
     fn to_root_to_empty_table() {
-        let buf: Vec<u8> = vec![
+        let buf = Aligned16Vec::from_u8s(vec![
             12, 0, 0, 0, // offset to root table
             // enter vtable
             4, 0, // vtable len
             0, 0, // inline size
             255, 255, 255, 255, // canary
             // enter table
-            8, 0, 0, 0, // vtable location
-        ];
+            10, 0, 0, 0, // vtable location
+        ]);
         let fs: flatbuffers::FollowStart<flatbuffers::ForwardsUOffset<flatbuffers::Table>> = flatbuffers::FollowStart::new();
-        assert_eq!(fs.self_follow(&buf[..], 0), flatbuffers::Table::new(&buf[..], 12));
+        assert_eq!(fs.self_follow(buf.as_ref(), 0), flatbuffers::Table::new(buf.as_ref(), 12));
     }
 
     #[test]
     fn to_root_table_get_slot_scalar_u8() {
-        let buf: Vec<u8> = vec![
-            14, 0, 0, 0, // offset to root table
+        let buf = Aligned16Vec::from_u8s(vec![
+            16, 0, 0, 0, // offset to root table
             // enter vtable
             6, 0, // vtable len
             2, 0, // inline size
             5, 0, // value loc
-            255, 255, 255, 255, // canary
+            255, 255, 255, 255, 255, 255, // canary
             // enter table
-            10, 0, 0, 0, // vtable location
+            12, 0, 0, 0, // vtable location
             0, 99 // value (with padding)
-        ];
+        ]);
         let fs: flatbuffers::FollowStart<flatbuffers::ForwardsUOffset<flatbuffers::Table>> = flatbuffers::FollowStart::new();
-        let tab = fs.self_follow(&buf[..], 0);
+        let tab = fs.self_follow(buf.as_ref(), 0);
         assert_eq!(tab.get::<u8>(fi2fo(0), Some(123)), Some(99));
     }
 
     #[test]
     fn to_root_to_table_get_slot_scalar_u8_default_via_vtable_len() {
-        let buf: Vec<u8> = vec![
+        let buf = Aligned16Vec::from_u8s(vec![
             12, 0, 0, 0, // offset to root table
             // enter vtable
             4, 0, // vtable len
@@ -2121,47 +2085,47 @@ mod follow_impls {
             255, 255, 255, 255, // canary
             // enter table
             8, 0, 0, 0, // vtable location
-        ];
+        ]);
         let fs: flatbuffers::FollowStart<flatbuffers::ForwardsUOffset<flatbuffers::Table>> = flatbuffers::FollowStart::new();
-        let tab = fs.self_follow(&buf[..], 0);
+        let tab = fs.self_follow(buf.as_ref(), 0);
         assert_eq!(tab.get::<u8>(fi2fo(0), Some(123)), Some(123));
     }
 
     #[test]
     fn to_root_to_table_get_slot_scalar_u8_default_via_vtable_zero() {
-        let buf: Vec<u8> = vec![
-            14, 0, 0, 0, // offset to root table
+        let buf = Aligned16Vec::from_u8s(vec![
+            16, 0, 0, 0, // offset to root table
             // enter vtable
             6, 0, // vtable len
             2, 0, // inline size
             0, 0, // zero means use the default value
-            255, 255, 255, 255, // canary
+            255, 255, 255, 255, 255, 255, // canary
             // enter table
-            10, 0, 0, 0, // vtable location
-        ];
+            12, 0, 0, 0, // vtable location
+        ]);
         let fs: flatbuffers::FollowStart<flatbuffers::ForwardsUOffset<flatbuffers::Table>> = flatbuffers::FollowStart::new();
-        let tab = fs.self_follow(&buf[..], 0);
+        let tab = fs.self_follow(buf.as_ref(), 0);
         assert_eq!(tab.get::<u8>(fi2fo(0), Some(123)), Some(123));
     }
 
     #[test]
     fn to_root_to_table_get_slot_string_multiple_types() {
-        let buf: Vec<u8> = vec![
-            14, 0, 0, 0, // offset to root table
+        let buf = Aligned16Vec::from_u8s(vec![
+            16, 0, 0, 0, // offset to root table
             // enter vtable
             6, 0, // vtable len
             2, 0, // inline size
             4, 0, // value loc
-            255, 255, 255, 255, // canary
+            255, 255, 255, 255, 255, 255, // canary
             // enter table
-            10, 0, 0, 0, // vtable location
+            12, 0, 0, 0, // vtable location
             8, 0, 0, 0, // offset to string
             // leave table
             255, 255, 255, 255, // canary
             // enter string
             3, 0, 0, 0, 109, 111, 111, 0 // string length and contents
-        ];
-        let tab = <flatbuffers::ForwardsUOffset<flatbuffers::Table>>::follow(&buf[..], 0);
+        ]);
+        let tab = <flatbuffers::ForwardsUOffset<flatbuffers::Table>>::follow(buf.as_ref(), 0);
         assert_eq!(tab.get::<flatbuffers::ForwardsUOffset<&str>>(fi2fo(0), None), Some("moo"));
         let byte_vec = tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<u8>>>(fi2fo(0), None).unwrap().safe_slice();
         assert_eq!(byte_vec, &vec![109, 111, 111][..]);
@@ -2174,7 +2138,7 @@ mod follow_impls {
 
     #[test]
     fn to_root_to_table_get_slot_string_multiple_types_default_via_vtable_len() {
-        let buf: Vec<u8> = vec![
+        let buf = Aligned16Vec::from_u8s(vec![
             12, 0, 0, 0, // offset to root table
             // enter vtable
             4, 0, // vtable len
@@ -2182,16 +2146,16 @@ mod follow_impls {
             255, 255, 255, 255, // canary
             // enter table
             8, 0, 0, 0, // vtable location
-        ];
-        let tab = <flatbuffers::ForwardsUOffset<flatbuffers::Table>>::follow(&buf[..], 0);
+        ]);
+        let tab = <flatbuffers::ForwardsUOffset<flatbuffers::Table>>::follow(&buf.as_ref(), 0);
         assert_eq!(tab.get::<flatbuffers::ForwardsUOffset<&str>>(fi2fo(0), Some("abc")), Some("abc"));
         #[cfg(target_endian = "little")]
         {
-            assert_eq!(tab.get::<flatbuffers::ForwardsUOffset<&[u8]>>(fi2fo(0), Some(&vec![70, 71, 72][..])), Some(&vec![70, 71, 72][..]));
+            assert_eq!(tab.get::<flatbuffers::ForwardsUOffset<&[u8]>>(fi2fo(0), Some(&[70, 71, 72][..])), Some(&[70, 71, 72][..]));
         }
 
-        let default_vec_buf: Vec<u8> = vec![3, 0, 0, 0, 70, 71, 72, 0];
-        let default_vec = flatbuffers::Vector::new(&default_vec_buf[..], 0);
+        let default_vec_buf = Aligned16Vec::from_u8s(vec![3, 0, 0, 0, 70, 71, 72, 0]);
+        let default_vec = flatbuffers::Vector::new(default_vec_buf.as_ref(), 0);
         let v = tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<u8>>>(fi2fo(0), Some(default_vec)).unwrap();
         assert_eq!(v.len(), 3);
         assert_eq!(v.get(0), 70);
@@ -2201,8 +2165,8 @@ mod follow_impls {
 
     #[test]
     fn to_root_to_table_get_slot_string_multiple_types_default_via_vtable_zero() {
-        let buf: Vec<u8> = vec![
-            14, 0, 0, 0, // offset to root table
+        let buf = Aligned16Vec::from_u8s(vec![
+            16, 0, 0, 0, // offset to root table
             // enter vtable
             6, 0, // vtable len
             2, 0, // inline size
@@ -2210,16 +2174,16 @@ mod follow_impls {
             255, 255, 255, 255, // canary
             // enter table
             10, 0, 0, 0, // vtable location
-        ];
-        let tab = <flatbuffers::ForwardsUOffset<flatbuffers::Table>>::follow(&buf[..], 0);
+        ]);
+        let tab = <flatbuffers::ForwardsUOffset<flatbuffers::Table>>::follow(&buf.as_ref(), 0);
         assert_eq!(tab.get::<flatbuffers::ForwardsUOffset<&str>>(fi2fo(0), Some("abc")), Some("abc"));
         #[cfg(target_endian = "little")]
         {
             assert_eq!(tab.get::<flatbuffers::ForwardsUOffset<&[u8]>>(fi2fo(0), Some(&vec![70, 71, 72][..])), Some(&vec![70, 71, 72][..]));
         }
 
-        let default_vec_buf: Vec<u8> = vec![3, 0, 0, 0, 70, 71, 72, 0];
-        let default_vec = flatbuffers::Vector::new(&default_vec_buf[..], 0);
+        let default_vec_buf = Aligned16Vec::from_u8s(vec![3, 0, 0, 0, 70, 71, 72, 0]);
+        let default_vec = flatbuffers::Vector::new(default_vec_buf.as_ref(), 0);
         let v = tab.get::<flatbuffers::ForwardsUOffset<flatbuffers::Vector<u8>>>(fi2fo(0), Some(default_vec)).unwrap();
         assert_eq!(v.len(), 3);
         assert_eq!(v.get(0), 70);
@@ -2249,6 +2213,7 @@ mod push_impls {
     #[test]
     fn push_u64() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
+        dbg!(b.unfinished_data());
         b.push(0x12345678);
         check(&b, &[0x78, 0x56, 0x34, 0x12]);
     }
@@ -2371,6 +2336,7 @@ mod vtable_deduplication {
         ]);
     }
 
+    #[cfg(not(miri))]  // miri is sooo slow.
     #[test]
     fn many_identical_tables_use_few_vtables() {
         let mut b = flatbuffers::FlatBufferBuilder::new();
@@ -3044,11 +3010,11 @@ fn write_example_wire_data_to_file() {
     f.write_all(b.finished_data()).unwrap();
 }
 
-fn load_file(filename: &str) -> Result<Vec<u8>, std::io::Error> {
+fn load_file(filename: &str) -> Result<flatbuffers::Aligned16Vec, std::io::Error> {
     use std::io::Read;
     let mut f = std::fs::File::open(filename)?;
     let mut buf = Vec::new();
     f.read_to_end(&mut buf)?;
-    Ok(buf)
+    Ok(flatbuffers::Aligned16Vec::from_u8s(buf))
 }
 }

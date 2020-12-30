@@ -40,7 +40,7 @@ mod verifier;
 mod vtable;
 mod vtable_writer;
 
-pub use crate::builder::FlatBufferBuilder;
+pub use crate::builder::{FlatBufferBuilder, Aligned16Vec};
 pub use crate::endian_scalar::{
     byte_swap_f32, byte_swap_f64, emplace_scalar, read_scalar, read_scalar_at, EndianScalar,
 };

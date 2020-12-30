@@ -236,8 +236,8 @@ impl<'opts, 'buf> Verifier<'opts, 'buf> {
     #[inline]
     fn is_aligned<T>(&self, pos: usize) -> Result<()> {
         // Safe because we're not dereferencing.
-        let p = unsafe { self.buffer.as_ptr().add(pos) };
-        if (p as usize) % std::mem::align_of::<T>() == 0 {
+        let ptr = self.buffer.as_ptr() as usize + std::mem::align_of::<T>();
+        if ptr % std::mem::align_of::<T>() == 0 {
             Ok(())
         } else {
             Err(InvalidFlatbuffer::Unaligned {

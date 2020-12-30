@@ -15,6 +15,7 @@
 use flexbuffers::*;
 use quickcheck::QuickCheck;
 
+#[cfg(not(miri))]  // slow.
 #[test]
 fn qc_reader_no_crash() {
     fn no_crash(xs: Vec<u8>) -> bool {
