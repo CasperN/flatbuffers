@@ -690,15 +690,15 @@ class RustGenerator : public BaseGenerator {
     switch (GetFullType(field.value.type)) {
       case ftInteger:
       case ftFloat: {
-        return field.optional ? "None" : field.value.constant;
+        return field.IsOptional() ? "None" : field.value.constant;
       }
       case ftBool: {
-        return field.optional ? "None"
+        return field.IsOptional() ? "None"
                               : field.value.constant == "0" ? "false" : "true";
       }
       case ftUnionKey:
       case ftEnumKey: {
-        if (field.optional) {
+        if (field.IsOptional()) {
             return "None";
         }
         auto ev = field.value.type.enum_def->FindByValue(field.value.constant);
@@ -735,7 +735,7 @@ class RustGenerator : public BaseGenerator {
       case ftFloat:
       case ftBool: {
         const auto typname = GetTypeBasic(type);
-        return field.optional ? "Option<" + typname + ">" : typname;
+        return field.IsOptional() ? "Option<" + typname + ">" : typname;
       }
       case ftStruct: {
         const auto typname = WrapInNameSpace(*type.struct_def);
@@ -752,7 +752,7 @@ class RustGenerator : public BaseGenerator {
       case ftEnumKey:
       case ftUnionKey: {
         const auto typname = WrapInNameSpace(*type.enum_def);
-        return field.optional ? "Option<" + typname + ">" : typname;
+        return field.IsOptional() ? "Option<" + typname + ">" : typname;
       }
       case ftUnionValue: {
         return "Option<flatbuffers::WIPOffset<flatbuffers::UnionWIPOffset>>";
@@ -874,14 +874,14 @@ class RustGenerator : public BaseGenerator {
       case ftBool:
       case ftFloat: {
         const auto typname = GetTypeBasic(field.value.type);
-        return (field.optional ? "self.fbb_.push_slot_always::<"
+        return (field.IsOptional() ? "self.fbb_.push_slot_always::<"
                                : "self.fbb_.push_slot::<") +
                typname + ">";
       }
       case ftEnumKey:
       case ftUnionKey: {
         const auto underlying_typname = GetTypeBasic(type);
-        return (field.optional ?
+        return (field.IsOptional() ?
                    "self.fbb_.push_slot_always::<" :
                    "self.fbb_.push_slot::<") + underlying_typname + ">";
       }
@@ -921,31 +921,31 @@ class RustGenerator : public BaseGenerator {
       case ftFloat:
       case ftBool: {
         const auto typname = GetTypeBasic(type);
-        return field.optional ? "Option<" + typname + ">" : typname;
+        return field.IsOptional() ? "Option<" + typname + ">" : typname;
       }
       case ftStruct: {
         const auto typname = WrapInNameSpace(*type.struct_def);
         return WrapInOptionIfNotRequired("&" + lifetime + " " + typname,
-                                         field.required);
+                                         field.IsRequired());
       }
       case ftTable: {
         const auto typname = WrapInNameSpace(*type.struct_def);
         return WrapInOptionIfNotRequired(typname + "<" + lifetime + ">",
-                                         field.required);
+                                         field.IsRequired());
       }
       case ftEnumKey:
       case ftUnionKey: {
         const auto typname = WrapInNameSpace(*type.enum_def);
-        return field.optional ? "Option<" + typname + ">" : typname;
+        return field.IsOptional() ? "Option<" + typname + ">" : typname;
       }
 
       case ftUnionValue: {
         return WrapInOptionIfNotRequired("flatbuffers::Table<" + lifetime + ">",
-                                         field.required);
+                                         field.IsRequired());
       }
       case ftString: {
         return WrapInOptionIfNotRequired("&" + lifetime + " str",
-                                         field.required);
+                                         field.IsRequired());
       }
       case ftVectorOfInteger:
       case ftVectorOfBool:
@@ -953,35 +953,35 @@ class RustGenerator : public BaseGenerator {
         const auto typname = GetTypeBasic(type.VectorType());
         if (IsOneByte(type.VectorType().base_type)) {
           return WrapInOptionIfNotRequired(
-              "&" + lifetime + " [" + typname + "]", field.required);
+              "&" + lifetime + " [" + typname + "]", field.IsRequired());
         }
         return WrapInOptionIfNotRequired(
             "flatbuffers::Vector<" + lifetime + ", " + typname + ">",
-            field.required);
+            field.IsRequired());
       }
       case ftVectorOfEnumKey: {
         const auto typname = WrapInNameSpace(*type.enum_def);
         return WrapInOptionIfNotRequired(
             "flatbuffers::Vector<" + lifetime + ", " + typname + ">",
-            field.required);
+            field.IsRequired());
       }
       case ftVectorOfStruct: {
         const auto typname = WrapInNameSpace(*type.struct_def);
         return WrapInOptionIfNotRequired("&" + lifetime + " [" + typname + "]",
-                                         field.required);
+                                         field.IsRequired());
       }
       case ftVectorOfTable: {
         const auto typname = WrapInNameSpace(*type.struct_def);
         return WrapInOptionIfNotRequired("flatbuffers::Vector<" + lifetime +
                                              ", flatbuffers::ForwardsUOffset<" +
                                              typname + "<" + lifetime + ">>>",
-                                         field.required);
+                                         field.IsRequired());
       }
       case ftVectorOfString: {
         return WrapInOptionIfNotRequired(
             "flatbuffers::Vector<" + lifetime +
                 ", flatbuffers::ForwardsUOffset<&" + lifetime + " str>>",
-            field.required);
+            field.IsRequired());
       }
       case ftVectorOfUnionValue: {
         FLATBUFFERS_ASSERT(false && "vectors of unions are not yet supported");
@@ -1061,9 +1061,9 @@ class RustGenerator : public BaseGenerator {
     const std::string vt_offset = GetFieldOffsetName(field);
     const std::string typname = FollowType(field.value.type, lifetime);
     // Default-y fields (scalars so far) are neither optional nor required.
-    const std::string default_value = !(field.optional || field.required) ?
+    const std::string default_value = !(field.IsOptional() || field.IsRequired()) ?
       "Some(" + GetDefaultScalarValue(field) + ")" : "None";
-    const std::string unwrap = field.optional ? "" : ".unwrap()";
+    const std::string unwrap = field.IsOptional() ? "" : ".unwrap()";
 
     const auto t = GetFullType(field.value.type);
 
@@ -1079,7 +1079,7 @@ class RustGenerator : public BaseGenerator {
   }
 
   bool TableFieldReturnsOption(const FieldDef &field) {
-    if (field.optional) return true;
+    if (field.IsOptional()) return true;
     switch (GetFullType(field.value.type)) {
       case ftInteger:
       case ftFloat:
@@ -1263,7 +1263,7 @@ class RustGenerator : public BaseGenerator {
         code_.SetValue("NESTED", WrapInNameSpace(*nested_root));
         code_ +=
             "  pub fn {{FIELD_NAME}}_nested_flatbuffer(&'a self) -> \\";
-        if (field.required) {
+        if (field.IsRequired()) {
           code_ += "{{NESTED}}<'a> {";
           code_ += "    let data = self.{{FIELD_NAME}}();";
           code_ += "    use flatbuffers::Follow;";
@@ -1310,7 +1310,7 @@ class RustGenerator : public BaseGenerator {
 
         // The following logic is not tested in the integration test,
         // as of April 10, 2020
-        if (field.required) {
+        if (field.IsRequired()) {
           code_ += "      let u = self.{{FIELD_NAME}}();";
           code_ += "      Some({{U_ELEMENT_TABLE_TYPE}}::init_from_table(u))";
         } else {
@@ -1342,7 +1342,7 @@ class RustGenerator : public BaseGenerator {
     ForAllTableFields(struct_def, [&](const FieldDef &field) {
       if (GetFullType(field.value.type) == ftUnionKey) return;
 
-      code_.SetValue("IS_REQ", field.required ? "true" : "false");
+      code_.SetValue("IS_REQ", field.IsRequired() ? "true" : "false");
       if (GetFullType(field.value.type) != ftUnionValue) {
         // All types besides unions.
         code_.SetValue("TY", FollowType(field.value.type, "'_"));
@@ -1390,7 +1390,7 @@ class RustGenerator : public BaseGenerator {
     code_ += "        {{STRUCT_NAME}}Args {";
     ForAllTableFields(struct_def, [&](const FieldDef &field) {
       code_ += "            {{FIELD_NAME}}: {{DEFAULT_VALUE}},\\";
-      code_ += field.required ? " // required field" : "";
+      code_ += field.IsRequired() ? " // required field" : "";
     });
     code_ += "        }";
     code_ += "    }";
@@ -1426,7 +1426,7 @@ class RustGenerator : public BaseGenerator {
       code_ += "  #[inline]";
       code_ += "  pub fn add_{{FIELD_NAME}}(&mut self, {{FIELD_NAME}}: "
                "{{FIELD_TYPE}}) {";
-      if (is_scalar && !field.optional) {
+      if (is_scalar && !field.IsOptional()) {
         code_ +=
             "    {{FUNC_BODY}}({{FIELD_OFFSET}}, {{FIELD_NAME}}, "
             "{{DEFAULT_VALUE}});";
@@ -1457,7 +1457,7 @@ class RustGenerator : public BaseGenerator {
     code_ += "    let o = self.fbb_.end_table(self.start_);";
 
     ForAllTableFields(struct_def, [&](const FieldDef &field) {
-      if (!field.required) return;
+      if (!field.IsRequired()) return;
       code_ +=
           "    self.fbb_.required(o, {{STRUCT_NAME}}::{{OFFSET_NAME}},"
           "\"{{FIELD_NAME}}\");";
@@ -1508,7 +1508,7 @@ class RustGenerator : public BaseGenerator {
   }
 
   // Generate functions to compare tables and structs by key. This function
-  // must only be called if the field key is defined.
+  // must only be called if the field.key is defined.
   void GenKeyFieldMethods(const FieldDef &field) {
     FLATBUFFERS_ASSERT(field.key);
 

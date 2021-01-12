@@ -291,14 +291,13 @@ struct Definition {
 struct FieldDef : public Definition {
   FieldDef()
       : deprecated(false),
-        required(false),
         key(false),
         shared(false),
         native_inline(false),
         flexbuffer(false),
-        optional(false),
         nested_flatbuffer(NULL),
-        padding(0) {}
+        padding(0),
+        presence(kDefault) {}
 
   Offset<reflection::Field> Serialize(FlatBufferBuilder *builder, uint16_t id,
                                       const Parser &parser) const;
@@ -306,23 +305,45 @@ struct FieldDef : public Definition {
   bool Deserialize(Parser &parser, const reflection::Field *field);
 
   bool IsScalarOptional() const {
-    return IsScalar(value.type.base_type) && optional;
+    return IsScalar(value.type.base_type) && IsOptional();
+  }
+  bool IsRequired() const {
+    return presence == kRequired;
+  }
+  bool IsOptional() const {
+    return presence == kOptional;
+  }
+  bool HasDefault() const {
+    return presence == kDefault;
   }
 
   Value value;
   bool deprecated;  // Field is allowed to be present in old data, but can't be.
                     // written in new data nor accessed in new code.
-  bool required;    // Field must always be present.
   bool key;         // Field functions as a key for creating sorted vectors.
   bool shared;  // Field will be using string pooling (i.e. CreateSharedString)
                 // as default serialization behavior if field is a string.
   bool native_inline;  // Field will be defined inline (instead of as a pointer)
                        // for native tables if field is a struct.
   bool flexbuffer;     // This field contains FlexBuffer data.
-  bool optional;       // If True, this field is Null (as opposed to default
-                       // valued).
   StructDef *nested_flatbuffer;  // This field contains nested FlatBuffer data.
   size_t padding;                // Bytes to always pad after this field.
+
+  // Defines the behavior of the field if not present in a flatbuffer binary.
+  // This is only applicable to Tables.
+  enum Presence {
+    // Required fields are assumed always present in a flatbuffer binary.
+    // Buffers missing these fields must fail their validator.
+    kRequired,
+    // Optional fields may not be present in a flatbuffer binary. Nonpresense
+    // must be signaled to readers.
+    kOptional,
+    // Default fields are interpreted to be of a specifiable default value if
+    // not present in a binary. Implementations may choose to omit writing these
+    // fields if set to the default value as an optimization.
+    kDefault,
+  };
+  Presence presence;
 };
 
 struct StructDef : public Definition {

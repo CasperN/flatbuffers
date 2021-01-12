@@ -777,34 +777,6 @@ CheckedError Parser::ParseField(StructDef &struct_def) {
           "default values currently only supported for scalars in tables");
   }
 
-  // Mark the optional scalars. Note that a side effect of ParseSingleValue is
-  // fixing field->value.constant to null.
-  if (IsScalar(type.base_type)) {
-    field->optional = (field->value.constant == "null");
-    if (field->optional) {
-      if (type.enum_def && type.enum_def->Lookup("null")) {
-        FLATBUFFERS_ASSERT(IsInteger(type.base_type));
-        return Error(
-            "the default 'null' is reserved for declaring optional scalar "
-            "fields, it conflicts with declaration of enum '" +
-            type.enum_def->name + "'.");
-      }
-      if (field->attributes.Lookup("key")) {
-        return Error(
-            "only a non-optional scalar field can be used as a 'key' field");
-      }
-      if (!SupportsOptionalScalars()) {
-        return Error(
-            "Optional scalars are not yet supported in at least one the of "
-            "the specified programming languages.");
-      }
-    }
-  } else {
-    // For nonscalars, only required fields are non-optional.
-    // At least until https://github.com/google/flatbuffers/issues/6053
-    field->optional = !field->required;
-  }
-
   // Append .0 if the value has not it (skip hex and scientific floats).
   // This suffix needed for generated C++ code.
   if (IsFloat(type.base_type)) {
@@ -833,7 +805,7 @@ CheckedError Parser::ParseField(StructDef &struct_def) {
     } else {
       // All unions should have the NONE ("0") enum value.
       auto in_enum = type.enum_def->attributes.Lookup("bit_flags") ||
-                     field->IsScalarOptional() ||
+                     field->value.constant == "null" ||
                      type.enum_def->FindByValue(field->value.constant);
       if (false == in_enum)
         return Error("default value of " + field->value.constant +
@@ -890,25 +862,51 @@ CheckedError Parser::ParseField(StructDef &struct_def) {
   }
   if (field->deprecated && struct_def.fixed)
     return Error("can't deprecate fields in a struct");
-  field->required = field->attributes.Lookup("required") != nullptr;
-  if (field->required && (struct_def.fixed || IsScalar(type.base_type)))
-    return Error("only non-scalar fields in tables may be 'required'");
 
-  if (!IsScalar(type.base_type)) {
-    // For nonscalars, only required fields are non-optional.
-    // At least until https://github.com/google/flatbuffers/issues/6053
-    field->optional = !field->required;
+  // Set presence semantics of the field.
+  if (field->attributes.Lookup("required") != nullptr) {
+    if (struct_def.fixed || IsScalar(type.base_type)) {
+      return Error("Only non-scalar fields in tables may be 'required'");
+    }
+    field->presence = FieldDef::kRequired;
+  }
+  field->key = field->attributes.Lookup("key") != nullptr;
+
+  if (IsScalar(type.base_type)) {
+    if (field->value.constant == "null") {
+      if (field->IsRequired()) {
+        return Error("Fields cannot be optional (`= null`) and required.");
+      }
+      field->presence = FieldDef::kOptional;
+
+      if (type.enum_def && type.enum_def->Lookup("null")) {
+        FLATBUFFERS_ASSERT(IsInteger(type.base_type));
+        return Error(
+            "the default 'null' is reserved for declaring optional scalar "
+            "fields, it conflicts with declaration of enum '" +
+            type.enum_def->name + "'.");
+      }
+      if (!SupportsOptionalScalars()) {
+        return Error(
+            "Optional scalars are not yet supported in at least one the of "
+            "the specified programming languages.");
+      }
+    }
+  } else if (!field->IsRequired()) {
+    // For nonscalars, non-required fields are optional as they cannot have
+    // defaults: https://github.com/google/flatbuffers/issues/6053
+    field->presence = FieldDef::kOptional;
   }
 
-  field->key = field->attributes.Lookup("key") != nullptr;
   if (field->key) {
     if (struct_def.has_key) return Error("only one field may be set as 'key'");
     struct_def.has_key = true;
     if (!IsScalar(type.base_type)) {
-      field->required = true;
-      field->optional = false;
-      if (type.base_type != BASE_TYPE_STRING)
+      if (type.base_type != BASE_TYPE_STRING) {
         return Error("'key' field must be string or scalar type");
+      }
+      // We don't know how to sort an optional string so we make it required.
+      field->presence = FieldDef::kRequired;
     }
   }
   field->shared = field->attributes.Lookup("shared") != nullptr;
@@ -949,7 +947,7 @@ CheckedError Parser::ParseField(StructDef &struct_def) {
   if (typefield) {
     if (!IsScalar(typefield->value.type.base_type)) {
       // this is a union vector field
-      typefield->required = field->required;
+      typefield->presence = field->presence;
     }
     // If this field is a union, and it has a manually assigned id,
     // the automatically added type field should have an id as well (of N - 1).
@@ -1244,7 +1242,7 @@ CheckedError Parser::ParseTable(const StructDef &struct_def, std::string *value,
   for (auto field_it = struct_def.fields.vec.begin();
        field_it != struct_def.fields.vec.end(); ++field_it) {
     auto required_field = *field_it;
-    if (!required_field->required) { continue; }
+    if (!required_field->IsRequired()) { continue; }
     bool found = false;
     for (auto pf_it = field_stack_.end() - fieldn_outer;
          pf_it != field_stack_.end(); ++pf_it) {
@@ -2776,7 +2774,9 @@ CheckedError Parser::ParseProtoFields(StructDef *struct_def, bool isextend,
       }
       if (!field) ECHECK(AddField(*struct_def, name, type, &field));
       field->doc_comment = field_comment;
-      if (!IsScalar(type.base_type)) field->required = required;
+      if (!IsScalar(type.base_type) && required) {
+        field->presence = FieldDef::kRequired;
+      }
       // See if there's a default specified.
       if (Is('[')) {
         NEXT();
@@ -3470,6 +3470,8 @@ Offset<reflection::Field> FieldDef::Serialize(FlatBufferBuilder *builder,
                     : 0;
   double d;
   StringToNumber(value.constant.c_str(), &d);
+  bool required = IsRequired();
+  bool optional = IsOptional();
   return reflection::CreateField(
       *builder, name__, type__, id, value.offset,
       // Is uint64>max(int64) tested?
@@ -3491,9 +3493,22 @@ bool FieldDef::Deserialize(Parser &parser, const reflection::Field *field) {
   } else if (IsFloat(value.type.base_type)) {
     value.constant = FloatToString(field->default_real(), 16);
   }
-  deprecated = field->deprecated();
-  required = field->required();
+
   key = field->key();
+
+  FLATBUFFERS_ASSERT(
+    !(field->required() && field->optional()) &&
+    "Field cannot be both required and optional"
+  );
+  if (field->required()) {
+    presence = kRequired;
+  } else if (field->optional()) {
+    presence = kOptional;
+  } else {
+    presence = kDefault;
+  }
+
+  deprecated = field->deprecated();
   if (!DeserializeAttributes(parser, field->attributes())) return false;
   // TODO: this should probably be handled by a separate attribute
   if (attributes.Lookup("flexbuffer")) {

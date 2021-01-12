@@ -292,8 +292,9 @@ struct JsonPrinter {
          it != struct_def.fields.vec.end(); ++it) {
       FieldDef &fd = **it;
       auto is_present = struct_def.fixed || table->CheckField(fd.value.offset);
-      auto output_anyway = (opts.output_default_scalars_in_json || fd.key) &&
-                           IsScalar(fd.value.type.base_type) && !fd.deprecated;
+      auto output_anyway = (opts.output_default_scalars_in_json || fd.key)
+                            && IsScalar(fd.value.type.base_type)
+                            && !fd.deprecated;
       if (is_present || output_anyway) {
         if (fieldout++) { AddComma(); }
         AddNewLine();

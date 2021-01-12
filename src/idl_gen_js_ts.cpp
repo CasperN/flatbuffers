@@ -598,11 +598,11 @@ class JsTsGenerator : public BaseGenerator {
                       nameprefix + field.name + "_");
       } else {
         *annotations +=
-            GenTypeAnnotation(kParam, GenTypeName(field.value.type, true, field.optional),
+            GenTypeAnnotation(kParam, GenTypeName(field.value.type, true, field.IsOptional()),
                               nameprefix + field.name);
         if (lang_.language == IDLOptions::kTs) {
           *arguments += ", " + nameprefix + field.name + ": " +
-                        GenTypeName(field.value.type, true, field.optional);
+                        GenTypeName(field.value.type, true, field.IsOptional());
         } else {
           *arguments += ", " + nameprefix + field.name;
         }
@@ -1444,7 +1444,7 @@ class JsTsGenerator : public BaseGenerator {
           if (field.value.type.enum_def) {
             code +=
                 "):" +
-                GenPrefixedTypeName(GenTypeName(field.value.type, false, field.optional),
+                GenPrefixedTypeName(GenTypeName(field.value.type, false, field.IsOptional()),
                                     field.value.type.enum_def->file) +
                 " {\n";
 
@@ -2002,7 +2002,7 @@ class JsTsGenerator : public BaseGenerator {
       for (auto it = struct_def.fields.vec.begin();
            it != struct_def.fields.vec.end(); ++it) {
         auto &field = **it;
-        if (!field.deprecated && field.required) {
+        if (!field.deprecated && field.IsRequired()) {
           code += "  builder.requiredField(offset, ";
           code += NumToString(field.value.offset);
           code += "); // " + field.name + "\n";
@@ -2117,11 +2117,11 @@ class JsTsGenerator : public BaseGenerator {
   }
   
   static bool HasNullDefault(const FieldDef &field) {
-    return field.optional && field.value.constant == "null";
+    return field.IsOptional() && field.value.constant == "null";
   }
 
   std::string GetArgType(const FieldDef &field, bool allowNull) {
-    auto type_name = GenTypeName(field.value.type, true, allowNull && field.optional);
+    auto type_name = GenTypeName(field.value.type, true, allowNull && field.IsOptional());
 
     if (field.value.type.enum_def) {
       if (IsScalar(field.value.type.base_type)) {
